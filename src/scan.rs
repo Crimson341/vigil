@@ -42,6 +42,11 @@ pub struct AdvisoryFinding {
     pub advisory_url: String,
     pub direct: bool,
     pub dev: bool,
+    /// For a transitive dependency, the chain of package names from a direct
+    /// dependency to this one (`vite › esbuild › this`). `None` for direct deps
+    /// or when the chain could not be reconstructed from the lockfile.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<Vec<String>>,
 }
 
 /// The `--format json` envelope.
@@ -54,6 +59,8 @@ pub struct ScanOutput {
     pub lockfile: Option<String>,
     pub used_range_fallback: bool,
     pub query_errors: usize,
+    /// How many findings were muted by an active `.vigilignore` rule.
+    pub suppressed: usize,
 }
 
 /// Scan options resolved from the CLI.
@@ -66,6 +73,8 @@ pub struct Options {
     pub max_age_secs: u64,
     pub quiet: bool,
     pub sarif_file: Option<PathBuf>,
+    /// Ignore `.vigilignore` entirely (report everything).
+    pub no_ignore: bool,
 }
 
 /// Run the scan. Returns the process exit code.
@@ -73,10 +82,15 @@ pub struct Options {
 pub fn run(opts: &Options) -> i32 {
     let declared = collect_declared(&opts.root);
 
-    let (mut deps, lockfile_label, used_range_fallback) =
+    let (mut deps, lockfile_label, lockfile_kind, used_range_fallback) =
         match lockfile::resolve_lockfile(&opts.root) {
-            Some(res) => (res.deps, Some(res.kind.label().to_string()), false),
-            None => (range_fallback_deps(&declared), None, true),
+            Some(res) => (
+                res.deps,
+                Some(res.kind.label().to_string()),
+                Some(res.kind),
+                false,
+            ),
+            None => (range_fallback_deps(&declared), None, None, true),
         };
 
     if deps.is_empty() {
@@ -137,6 +151,18 @@ pub fn run(opts: &Options) -> i32 {
     });
     findings.dedup_by(|a, b| a.package == b.package && a.version == b.version && a.osv_id == b.osv_id);
 
+    // Reconstruct the "why is this here" path for each transitive finding.
+    attach_paths(&mut findings, &opts.root, lockfile_kind, &declared.direct);
+
+    // Apply `.vigilignore` suppressions (unless disabled).
+    let (findings, suppressed, stale) = if opts.no_ignore {
+        (findings, 0, Vec::new())
+    } else {
+        let ignores = crate::ignore::IgnoreSet::load(&opts.root);
+        let ev = ignores.apply(findings, crate::ignore::today_days());
+        (ev.kept, ev.suppressed, ev.stale)
+    };
+
     let output = ScanOutput {
         schema_version: "1",
         advisory_findings: findings,
@@ -144,6 +170,7 @@ pub fn run(opts: &Options) -> i32 {
         lockfile: lockfile_label,
         used_range_fallback,
         query_errors,
+        suppressed,
     };
 
     if let Some(path) = &opts.sarif_file
@@ -158,7 +185,7 @@ pub fn run(opts: &Options) -> i32 {
     match opts.format {
         OutputFormat::Json => println!("{}", render_json(&output)),
         OutputFormat::Sarif => println!("{}", render_sarif(&output)),
-        OutputFormat::Human => print_human(&output, opts.quiet),
+        OutputFormat::Human => print_human(&output, &stale, opts.quiet),
     }
 
     exit_code(&output, opts.fail_on)
@@ -276,6 +303,32 @@ fn build_finding(
         advisory_url: format!("https://osv.dev/vulnerability/{}", vuln.id),
         direct: direct_names.contains(&dep.name),
         dev: dep.dev,
+        path: None,
+    }
+}
+
+/// Fill in `path` for each transitive finding by walking the lockfile graph
+/// from the direct dependencies. No-op when the graph can't be built (e.g. range
+/// fallback) — transitive findings then render without a chain.
+fn attach_paths(
+    findings: &mut [AdvisoryFinding],
+    root: &Path,
+    kind: Option<lockfile::LockfileKind>,
+    direct: &std::collections::HashSet<String>,
+) {
+    let Some(kind) = kind else { return };
+    let Ok(content) = std::fs::read_to_string(root.join(kind.filename())) else {
+        return;
+    };
+    let graph = crate::graph::DepGraph::from_lockfile(&content, kind);
+    if graph.is_empty() {
+        return;
+    }
+    for finding in findings.iter_mut() {
+        if finding.direct {
+            continue;
+        }
+        finding.path = graph.path_to(direct, &finding.package);
     }
 }
 
@@ -411,7 +464,7 @@ fn color_severity(severity: AdvisorySeverity) -> colored::ColoredString {
     }
 }
 
-fn print_human(output: &ScanOutput, quiet: bool) {
+fn print_human(output: &ScanOutput, stale: &[String], quiet: bool) {
     let lockfile = output
         .lockfile
         .as_deref()
@@ -453,6 +506,11 @@ fn print_human(output: &ScanOutput, quiet: bool) {
                 f.package.bold(),
                 f.version,
             );
+            if let Some(path) = &f.path
+                && path.len() > 1
+            {
+                println!("      via {}", path.join(" › ").dimmed());
+            }
             if let Some(summary) = &f.summary {
                 println!("      {summary}");
             }
@@ -471,8 +529,22 @@ fn print_human(output: &ScanOutput, quiet: bool) {
         }
     }
 
+    if output.suppressed > 0 {
+        println!(
+            "{}",
+            format!(
+                "  ({} finding(s) muted by .vigilignore)",
+                output.suppressed
+            )
+            .dimmed()
+        );
+    }
+
     if quiet {
         return;
+    }
+    for note in stale {
+        eprintln!("{} {note}", "stale:".yellow());
     }
     if output.used_range_fallback {
         eprintln!(
@@ -507,6 +579,7 @@ mod tests {
             advisory_url: "https://osv.dev/vulnerability/GHSA-xxxx".to_string(),
             direct: true,
             dev: false,
+            path: None,
         }
     }
 
@@ -518,6 +591,7 @@ mod tests {
             lockfile: Some("pnpm-lock.yaml".to_string()),
             used_range_fallback: false,
             query_errors: 0,
+            suppressed: 0,
         }
     }
 

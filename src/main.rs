@@ -5,6 +5,8 @@
 //! against the OSV.dev advisory database (GitHub Advisories + npm feed + CVEs),
 //! reporting known vulnerabilities with a real severity and a known fix version.
 
+mod graph;
+mod ignore;
 mod lockfile;
 mod osv;
 mod pkg;
@@ -53,6 +55,10 @@ struct Cli {
     /// Suppress the informational blind-spot notes on stderr.
     #[arg(long, short)]
     quiet: bool,
+
+    /// Ignore the `.vigilignore` file and report every finding.
+    #[arg(long)]
+    no_ignore: bool,
 }
 
 /// Severity gate for `--fail-on`.
@@ -86,6 +92,7 @@ fn main() -> ExitCode {
         max_age_secs: cli.max_age,
         quiet: cli.quiet,
         sarif_file: cli.sarif_file,
+        no_ignore: cli.no_ignore,
     });
     ExitCode::from(u8::try_from(code).unwrap_or(2))
 }

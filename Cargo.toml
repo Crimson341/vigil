@@ -1,6 +1,6 @@
 [package]
 name = "vigil"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT"
 description = "Fast, opinionated dependency vulnerability scanner for JavaScript and TypeScript projects, powered by OSV.dev."

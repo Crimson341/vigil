@@ -18,6 +18,8 @@
 ## Why vigil
 
 - **Lockfile-native.** Reads `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, and `bun.lock` directly — exact installed versions, not `package.json` ranges.
+- **Tells you *why* a vuln is there.** For a transitive dependency, vigil shows the chain that pulls it in — `via vite › esbuild` — so you know which parent to upgrade instead of staring at a package you never installed.
+- **Livable in CI.** A `.vigilignore` lets you mute a specific advisory with a reason and an optional expiry, so one unfixable transitive vuln doesn't block every build. Expired or dead ignores are flagged so they don't rot.
 - **No API key, no account.** Queries the public OSV.dev API. Your package names + versions are the only thing sent; never your code.
 - **Fast & cached.** Parallel queries with an on-disk cache under `.vigil/osv`, so re-runs (and CI) are near-instant.
 - **CI-ready.** `--fail-on <severity>` gates your pipeline; `--format sarif` drops straight into the GitHub Security tab.
@@ -43,6 +45,19 @@ vigil --format json                # machine-readable
 vigil --format sarif --sarif-file vigil.sarif   # upload to GitHub code scanning
 vigil --refresh                    # ignore the cache and re-query
 ```
+
+### Suppressing findings (`.vigilignore`)
+
+Drop a `.vigilignore` file at your project root to mute advisories you've triaged — gitignore-style, one matcher per line:
+
+```text
+# match an OSV id, a CVE id, or a bare package name
+GHSA-p6mc-m468-83gw                      # reason after a hash
+CVE-2021-23337   until=2026-12-31        # expires; re-surfaces after this date
+lodash                                   # mute every advisory for a package
+```
+
+Expired suppressions stop muting (the finding returns) and dead ones (matched nothing) are reported as stale, so your ignore list doesn't rot. Use `--no-ignore` to report everything regardless.
 
 ### Exit codes
 
@@ -78,11 +93,14 @@ human / JSON / SARIF
 
 Early but working — npm/pnpm/yarn/bun lockfiles, live OSV matching, human/JSON/SARIF output, CI gating. Validated against real-world projects (a 1500-package Bun monorepo surfaces correctly with direct/transitive attribution and per-version dedup).
 
+Shipped in v0.2: transitive "why is this here" paths and `.vigilignore` suppressions.
+
 Planned:
 
+- `vigil fix` — auto-upgrade the lockfile to the fixed versions
+- License compliance + malicious-package (OSV `MAL-`) checks
 - GitHub Action + scheduled re-scans (catch newly-published CVEs without a code change)
 - `--offline --db <path>` mode for air-gapped CI (downloadable OSV snapshot)
-- Lockfile-aware "fix" suggestions
 - More ecosystems (OSV supports PyPI, crates.io, Go, …)
 
 ## License

@@ -11,19 +11,25 @@ mod lockfile;
 mod osv;
 mod pkg;
 mod scan;
+mod secrets;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 use osv::AdvisorySeverity;
 use scan::OutputFormat;
 
-/// Scan installed dependencies for known vulnerabilities (via OSV.dev).
+/// vigil — check a JavaScript/TypeScript project for known security problems.
+///
+/// With no subcommand, scans your dependencies for known vulnerabilities.
 #[derive(Parser)]
 #[command(name = "vigil", version, about, long_about = None)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Project root to scan (must contain a lockfile or package.json).
     #[arg(long, default_value = ".")]
     path: PathBuf,
@@ -61,6 +67,20 @@ struct Cli {
     no_ignore: bool,
 }
 
+/// vigil subcommands. Each is a separate kind of check.
+#[derive(Subcommand)]
+enum Command {
+    /// Scan source files for committed secrets (API keys, tokens, private keys).
+    Secrets {
+        /// Project root to scan.
+        #[arg(long, default_value = ".")]
+        path: PathBuf,
+        /// Output format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        format: OutputFormat,
+    },
+}
+
 /// Severity gate for `--fail-on`.
 #[derive(Debug, Clone, Copy, clap::ValueEnum)]
 enum FailOn {
@@ -83,16 +103,19 @@ impl FailOn {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    let code = scan::run(&scan::Options {
-        root: cli.path,
-        format: cli.format,
-        prod_only: cli.prod_only,
-        fail_on: cli.fail_on.map(FailOn::to_severity),
-        refresh: cli.refresh,
-        max_age_secs: cli.max_age,
-        quiet: cli.quiet,
-        sarif_file: cli.sarif_file,
-        no_ignore: cli.no_ignore,
-    });
+    let code = match cli.command {
+        Some(Command::Secrets { path, format }) => secrets::run(&path, format),
+        None => scan::run(&scan::Options {
+            root: cli.path,
+            format: cli.format,
+            prod_only: cli.prod_only,
+            fail_on: cli.fail_on.map(FailOn::to_severity),
+            refresh: cli.refresh,
+            max_age_secs: cli.max_age,
+            quiet: cli.quiet,
+            sarif_file: cli.sarif_file,
+            no_ignore: cli.no_ignore,
+        }),
+    };
     ExitCode::from(u8::try_from(code).unwrap_or(2))
 }

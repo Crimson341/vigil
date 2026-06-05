@@ -24,6 +24,8 @@ semver = "1"
 colored = "3"
 rayon = "1"
 glob = "0.3"
+regex = "1"
+ignore = "0.4"
 
 [profile.release]
 lto = true

@@ -1,8 +1,8 @@
 # vigil
 
-**Fast, opinionated dependency vulnerability scanner for JavaScript & TypeScript projects — powered by [OSV.dev](https://osv.dev).**
+A command-line tool that checks your JavaScript/TypeScript dependencies for known security vulnerabilities.
 
-`vigil` reads your lockfile, figures out the *exact* versions you have installed, and checks every one of them against the OSV.dev advisory database (which aggregates the GitHub Advisory Database, the npm advisory feed, and CVEs). It reports **known** vulnerabilities — with a real severity and the version that fixes them — not heuristic guesses.
+It reads your lockfile (pnpm, npm, yarn, or bun), looks up every installed package in the [OSV.dev](https://osv.dev) vulnerability database, and tells you which ones have known problems and what version fixes them.
 
 ```
 ! 6 known vulnerabilities across 1 package(s) (pnpm-lock.yaml):
@@ -15,20 +15,18 @@
       https://osv.dev/vulnerability/GHSA-35jh-r3h4-6jhm
 ```
 
-## Why vigil
+## What it does
 
-- **Lockfile-native.** Reads `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, and `bun.lock` directly — exact installed versions, not `package.json` ranges.
-- **Tells you *why* a vuln is there.** For a transitive dependency, vigil shows the chain that pulls it in — `via vite › esbuild` — so you know which parent to upgrade instead of staring at a package you never installed.
-- **Livable in CI.** A `.vigilignore` lets you mute a specific advisory with a reason and an optional expiry, so one unfixable transitive vuln doesn't block every build. Expired or dead ignores are flagged so they don't rot.
-- **No API key, no account.** Queries the public OSV.dev API. Your package names + versions are the only thing sent; never your code.
-- **Fast & cached.** Parallel queries with an on-disk cache under `.vigil/osv`, so re-runs (and CI) are near-instant.
-- **CI-ready.** `--fail-on <severity>` gates your pipeline; `--format sarif` drops straight into the GitHub Security tab.
-- **Honest about blind spots.** No lockfile? It falls back to `package.json` ranges and *tells you* the result isn't exact. Network hiccup? It reports how many packages went unchecked instead of pretending the tree is clean.
+- Finds vulnerable packages in your dependency tree
+- Shows which version to upgrade to
+- For deep dependencies, shows what's pulling them in (e.g. `via vite › esbuild`)
+- Lets you ignore issues you've already handled (`.vigilignore`)
+- Works in CI — the exit code can fail your build when something's found
+- No API key or account needed; only package names and versions are sent, never your code
 
 ## Install
 
 ```bash
-# From source (requires a recent Rust toolchain)
 git clone https://github.com/Crimson341/vigil
 cd vigil
 cargo install --path .
@@ -74,26 +72,15 @@ Expired suppressions stop muting (the finding returns) and dead ones (matched no
 
 ## How it works
 
-```
-package.json + lockfile  ──▶  resolve exact installed versions
-        │                     (pnpm-lock.yaml > package-lock.json > yarn.lock > bun.lock;
-        │                      falls back to package.json ranges with a blind-spot flag)
-        ▼
-query OSV.dev  ──────────▶  POST /v1/query per package — OSV does the version-range
-        │                    matching server-side; results cached under .vigil/osv
-        ▼
-findings  ───────────────▶  severity (GHSA label → CVSS → unknown), CVE/GHSA ids,
-                             lowest published fix above the installed version
-        │
-        ▼
-human / JSON / SARIF
-```
+1. Read the lockfile to get the exact version of every installed package.
+2. Ask OSV.dev which of those versions have known vulnerabilities.
+3. Print the results, with the fix version and (for deep dependencies) what pulls them in.
 
-## Status & roadmap
+Results are cached under `.vigil/osv`, so repeat runs are fast. If there's no lockfile, it falls back to the `package.json` version ranges and warns you that the result isn't exact.
 
-Early but working — npm/pnpm/yarn/bun lockfiles, live OSV matching, human/JSON/SARIF output, CI gating. Validated against real-world projects (a 1500-package Bun monorepo surfaces correctly with direct/transitive attribution and per-version dedup).
+## Status
 
-Shipped in v0.2: transitive "why is this here" paths and `.vigilignore` suppressions.
+Works today on pnpm, npm, yarn, and bun projects, with human, JSON, and SARIF output. Still early.
 
 Planned:
 
